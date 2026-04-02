@@ -82,6 +82,9 @@ struct ImmersiveView: View {
     @State private var rayContainers: [Entity] = []
     @State private var hitIndicatorEntities: [ModelEntity] = []
 
+    // NEW: 用于让 Cube 到处跑的引用
+    @State private var targetCubeEntity: Entity?
+
     // NEW: 保存7个状态的数组，0 为绿，1 为红
     @State private var hudIndicatorStates: [Int] = Array(repeating: 0, count: 7)
 
@@ -154,6 +157,7 @@ struct ImmersiveView: View {
                         }
 
                         rootAnchor.addChild(spawnCube)
+                        self.targetCubeEntity = spawnCube // 保存引用以便后续移动它
 
                         // NEW: 创建 6 条世界射线呈 60 度角辐射
                         var tempContainers: [Entity] = []
@@ -261,6 +265,19 @@ struct ImmersiveView: View {
         .ignoresSafeArea()
         // 统一在主频率 Timer 里更新逻辑
         .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+            
+            // NEW: 让 Cube 到处跑的逻辑
+            // 使用多个不同频率的三角函数叠加，可以制造一种不规则的漫游轨迹
+            if let cube = targetCubeEntity {
+                let t = Float(updateTick) * 0.1 // 随着时间推进
+                // X 轴偏移量（左右移动范围大约是 6 米）
+                let wanderX = sin(t * 0.5) * 4.0 + cos(t * 0.3) * 2.0
+                // Z 轴偏移量（前后移动范围大约在 -7 米 到 1 米之间）
+                let wanderZ = -3.0 + cos(t * 0.4) * 4.0 + sin(t * 0.2) * 2.0
+                
+                cube.position = SIMD3<Float>(wanderX, 0.85, wanderZ)
+            }
+            
             updateWorldTrackingAndEntities()
             DetectObstaclesWithRayCast()
             detectForwardCubeHit()
@@ -461,9 +478,17 @@ struct ImmersiveView: View {
         let devicePos = SIMD3<Float>(transformMatrix.columns.3.x, transformMatrix.columns.3.y, transformMatrix.columns.3.z)
         let forward = normalize(SIMD3<Float>(-transformMatrix.columns.2.x, -transformMatrix.columns.2.y, -transformMatrix.columns.2.z))
         
-        // 直接使用设备原点作为起点，不再向前推移
-        let origin = devicePos
-        let baseForward = forward
+        // 1. 锁死射线发射的高度为 1.2 米 (只取头显的真实 X 和 Z)
+        let origin = SIMD3<Float>(devicePos.x, 1.2, devicePos.z)
+        
+        // 2. 抹除俯仰角：将视线的前方向量投影到水平面 (Y设为0) 并重新归一化
+        var flatForward = SIMD3<Float>(forward.x, 0, forward.z)
+        if length(flatForward) > 0.001 {
+            flatForward = normalize(flatForward)
+        } else {
+            flatForward = SIMD3<Float>(0, 0, -1) // 极低概率垂直看地面时的防错处理
+        }
+        let baseForward = flatForward
         #endif
 
         // 循环发射 6 条射线
@@ -492,10 +517,20 @@ struct ImmersiveView: View {
                 if hitName.contains("Crossing_Tokyo") { continue }
             }
 
-            // 如果打中，对应下标变红 (为了实现1和6对换、2和5对换、3和4对换，直接使用 6 - i)  
+            // 初始化强度为 0 (没撞到)
+            var intensity = 0
+
+            // 如果打中了
             if hitCube {
+                // UI 界面对应下标变红
                 newStates[6 - i] = 1
+                
+                // 撞到了就直接发 99
+                intensity = 99
             }
+
+            // 发送 UDP 消息：每条射线固定发给它对应的 IPv6 设备
+            appModel.sendIntensityToDevice(index: i, intensity: intensity)
 
             // 更新 3D 渲染画面 (射线实体、指示球)
             if i < rayContainers.count && i < forwardRayEntities.count && i < hitIndicatorEntities.count {
@@ -523,6 +558,7 @@ struct ImmersiveView: View {
 
         // 把最新的 6 条方向判定立刻同步给界面 HUD
         hudIndicatorStates = newStates
+        // 移除了旧的广播代码 appModel.broadcastStates(states: newStates)
     }
 }
 
