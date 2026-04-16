@@ -51,7 +51,12 @@ struct GUIOverlay: View {
                 let baseAngle: Float = .pi / 2.0
                 let offset: Float = (2.0 * .pi) / 3.0
                 let step: Float = Float(i) * (.pi / 3.0)
-                let angle: Float = baseAngle + offset - step
+                // HUD 需求：整体顺时针旋转 60 度。
+                // 在当前坐标约定中，减去 pi/3 即为顺时针 60°。
+                let hudClockwise60: Float = -.pi / 3.0
+                // 在当前基础上再逆时针旋转 90°。
+                let hudCounterClockwise90: Float = .pi / 2.0
+                let angle: Float = baseAngle + offset + hudClockwise60 + hudCounterClockwise90 - step
                 
                 let x = cosf(angle) * ringRadius
                 // 【修改这里】：加上负号，实现 3D 空间的上下翻转
@@ -95,7 +100,15 @@ struct GUIOverlay: View {
         
         for i in 0..<7 {
             let disc = hudDiscs[i]
-            let color = states[i] == 1 ? UIColor.red : UIColor.green
+            
+            let color: UIColor
+            if states[i] == 1 {
+                color = .red
+            } else if states[i] == 2 {
+                color = .yellow
+            } else {
+                color = .green
+            }
             
             if var modelComponent = disc.components[ModelComponent.self] as? ModelComponent {
                 modelComponent.materials = [UnlitMaterial(color: color)]
